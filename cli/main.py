@@ -514,6 +514,146 @@ def execute(
 
 
 @app.command()
+def status(
+    session_id: Optional[str] = typer.Argument(None, help="Session ID to check (optional)"),
+    repo: Optional[str] = typer.Option(None, "--repo", "-r", help="Filter by repository (owner/name)"),
+    issue: Optional[int] = typer.Option(None, "--issue", "-i", help="Filter by issue number"),
+    phase: Optional[str] = typer.Option(None, "--phase", "-p", help="Filter by phase (scope/exec)"),
+    limit: int = typer.Option(20, "--limit", "-l", help="Maximum number of sessions to show"),
+    orchestrator_url: str = typer.Option("http://localhost:8000", envvar="ORCHESTRATOR_URL"),
+):
+    """
+    Check status of Devin sessions.
+    
+    Examples:
+      devin-issues status                           # Show all recent sessions
+      devin-issues status SESSION_ID                # Show specific session
+      devin-issues status -r owner/repo             # Show sessions for a repo
+      devin-issues status -r owner/repo -i 5        # Show sessions for issue #5
+      devin-issues status -p scope                  # Show only scoping sessions
+    """
+    try:
+        # If session_id provided, show detailed status for that session
+        if session_id:
+            console.print(f"[bold]Fetching status for session:[/bold] [cyan]{session_id}[/cyan]\n")
+            
+            with httpx.Client(timeout=30.0) as client:
+                response = client.get(f"{orchestrator_url}/api/v1/sessions/{session_id}")
+                response.raise_for_status()
+                data = response.json()
+            
+            # Display detailed session info
+            console.print(f"[bold]Session ID:[/bold] {data['session_id']}")
+            console.print(f"[bold]Title:[/bold] {data.get('title', 'N/A')}")
+            console.print(f"[bold]Status:[/bold] {data.get('status_enum', data.get('status', 'unknown'))}")
+            
+            if data.get('created_at'):
+                console.print(f"[bold]Created:[/bold] {data['created_at']}")
+            if data.get('updated_at'):
+                console.print(f"[bold]Updated:[/bold] {data['updated_at']}")
+            if data.get('url'):
+                console.print(f"[bold]URL:[/bold] {data['url']}")
+            
+            # Show structured output if available
+            structured_output = data.get('structured_output')
+            if structured_output:
+                console.print("\n[bold cyan]Structured Output:[/bold cyan]")
+                import json
+                console.print(json.dumps(structured_output, indent=2))
+            else:
+                console.print("\n[dim]No structured output available yet.[/dim]")
+            
+            console.print()
+            return
+        
+        # Otherwise, list sessions with filters
+        params = {"limit": limit}
+        if repo:
+            params["repo"] = repo
+        if issue is not None:
+            params["issue_number"] = issue
+        if phase:
+            params["phase"] = phase
+        
+        console.print("[bold]Fetching sessions...[/bold]\n")
+        
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(
+                f"{orchestrator_url}/api/v1/sessions",
+                params=params
+            )
+            response.raise_for_status()
+            data = response.json()
+        
+        sessions = data.get("sessions", [])
+        count = data.get("count", 0)
+        
+        if not sessions:
+            console.print("[yellow]No sessions found.[/yellow]\n")
+            return
+        
+        # Display sessions in a table
+        from rich.table import Table
+        
+        table = Table(title=f"Recent Sessions ({count} found)", show_header=True)
+        table.add_column("Session ID", style="cyan", no_wrap=True)
+        table.add_column("Repo", style="blue")
+        table.add_column("Issue", justify="right")
+        table.add_column("Phase", style="magenta")
+        table.add_column("Status", style="green")
+        table.add_column("Created", style="dim")
+        
+        for session in sessions:
+            session_id = session['session_id']
+            repo = session['repo'] or 'N/A'
+            issue_num = f"#{session['issue_number']}" if session['issue_number'] else 'N/A'
+            phase = session['phase']
+            status = session['status']
+            
+            # Format created time
+            created = session.get('created_at', 'N/A')
+            if created != 'N/A':
+                from datetime import datetime
+                try:
+                    dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                    created = dt.strftime("%m/%d %H:%M")
+                except:
+                    pass
+            
+            # Color status
+            if status == 'finished':
+                status_styled = f"[green]{status}[/green]"
+            elif status in ['blocked', 'failed']:
+                status_styled = f"[red]{status}[/red]"
+            elif status == 'running':
+                status_styled = f"[yellow]{status}[/yellow]"
+            else:
+                status_styled = status
+            
+            table.add_row(
+                session_id,
+                repo,
+                issue_num,
+                phase,
+                status_styled,
+                created
+            )
+        
+        console.print(table)
+        console.print(f"\n[dim]Tip: Use 'devin-issues status SESSION_ID' for detailed info[/dim]\n")
+        
+    except httpx.HTTPStatusError as e:
+        console.print(f"[bold red]❌ HTTP Error {e.response.status_code}:[/bold red] {e.response.text}")
+        raise typer.Exit(1)
+    except httpx.RequestError as e:
+        console.print(f"[bold red]❌ Connection Error:[/bold red] {str(e)}")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[bold red]❌ Error:[/bold red] {str(e)}")
+        raise typer.Exit(1)
+
+
+@app.command()
 def version():
     """Show version information."""
     console.print("[bold cyan]Devin GitHub Issues Automation CLI[/bold cyan]")

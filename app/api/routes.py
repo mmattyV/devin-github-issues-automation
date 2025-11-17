@@ -526,3 +526,72 @@ async def poll_session(
     except Exception as e:
         logger.error(f"Error polling session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sessions")
+async def list_sessions(
+    repo: Optional[str] = None,
+    issue_number: Optional[int] = None,
+    phase: Optional[str] = None,
+    limit: int = 50,
+    db: Session = Depends(get_db_session),
+):
+    """
+    List sessions with optional filtering.
+    
+    Query parameters:
+    - repo: Filter by repository (owner/name)
+    - issue_number: Filter by issue number (requires repo)
+    - phase: Filter by phase (scope or exec)
+    - limit: Maximum number of results (default 50)
+    """
+    try:
+        query = db.query(DBSession)
+        
+        # Apply filters
+        if repo:
+            query = query.filter_by(repo=repo)
+        
+        if issue_number is not None:
+            if not repo:
+                raise HTTPException(
+                    status_code=400,
+                    detail="repo parameter is required when filtering by issue_number"
+                )
+            query = query.filter_by(issue_number=issue_number)
+        
+        if phase:
+            if phase.lower() == "scope":
+                query = query.filter_by(phase=SessionPhase.SCOPE)
+            elif phase.lower() in ["exec", "execute"]:
+                query = query.filter_by(phase=SessionPhase.EXEC)
+            else:
+                raise HTTPException(status_code=400, detail="phase must be 'scope' or 'exec'")
+        
+        # Order by most recent first
+        sessions = query.order_by(DBSession.created_at.desc()).limit(limit).all()
+        
+        return {
+            "sessions": [
+                {
+                    "session_id": s.session_id,
+                    "repo": s.repo,
+                    "issue_number": s.issue_number,
+                    "phase": s.phase.value,
+                    "status": s.status.value,
+                    "title": s.title,
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                    "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+                    "finished_at": s.finished_at.isoformat() if s.finished_at else None,
+                    "structured_output": s.last_structured_output,
+                }
+                for s in sessions
+            ],
+            "count": len(sessions),
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing sessions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
