@@ -594,15 +594,15 @@ This is SCOPING only - do not write code or make changes. Just analyze and plan.
         scoping_plan: Dict[str, Any],
     ) -> str:
         """Build the execution prompt from scoping data."""
-        plan_text = "\n".join(
-            f"{i+1}. {step.get('step', 'N/A')}: {step.get('rationale', 'N/A')}"
-            for i, step in enumerate(scoping_plan.get("plan", []))
-        ) if scoping_plan.get("plan") else "No plan available."
+        # Handle plan - now a simple list of strings (simplified schema)
+        plan_steps = scoping_plan.get("plan", []) if scoping_plan else []
+        if plan_steps:
+            plan_text = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan_steps))
+        else:
+            plan_text = "No plan available."
         
-        dod_text = "\n".join(
-            f"- {item}"
-            for item in scoping_plan.get("definition_of_done", [])
-        ) if scoping_plan.get("definition_of_done") else "- Complete implementation\n- Tests pass"
+        # Get summary if available
+        summary = scoping_plan.get("summary", "") if scoping_plan else ""
         
         import json
         
@@ -614,18 +614,22 @@ This is SCOPING only - do not write code or make changes. Just analyze and plan.
             "tests_failed": 0
         }
         
-        return f"""Implement GitHub issue #{issue_number} in {repo}.
+        prompt = f"""Implement GitHub issue #{issue_number} in {repo}.
 
-**Issue**: {issue_title}
+**Issue**: {issue_title}"""
+        
+        if summary:
+            prompt += f"\n\n**Summary**: {summary}"
+        
+        prompt += f"""
 
 **Implementation Plan**:
 {plan_text}
-
-**Definition of Done**:
-{dod_text}
 
 **Your Task**:
 Implement the changes and provide updates in this format. Please update the structured output immediately when you create the branch, run tests, or open a PR:
 {json.dumps(schema)}
 
-Create a feature branch, implement the changes, write/update tests, and open a PR. Update status as you progress: planning → coding → testing → done"""
+Create a feature branch, implement the changes following the plan, write/update tests, and open a PR. Update status as you progress: planning → coding → testing → done"""
+        
+        return prompt

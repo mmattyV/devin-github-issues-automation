@@ -204,6 +204,10 @@ def scope(
         console.print("[bold]Waiting for Devin to complete scoping...[/bold]")
         console.print("[dim](This may take 2-5 minutes)[/dim]\n")
         
+        start_time = time.time()
+        poll_count = 0
+        timed_out = False
+        
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -212,9 +216,6 @@ def scope(
         ) as progress:
             task = progress.add_task("[cyan]Analyzing issue...", total=None)
             
-            start_time = time.time()
-            poll_count = 0
-            
             while True:
                 time.sleep(10)  # Poll every 10 seconds
                 poll_count += 1
@@ -222,34 +223,68 @@ def scope(
                 
                 progress.update(task, description=f"[cyan]Analyzing issue... ({elapsed}s, poll #{poll_count})")
                 
-                # Get status (increased timeout for slow responses)
-                status_response = httpx.get(
-                    f"{orchestrator_url}/api/v1/sessions/{session_id}",
-                    timeout=90.0,
-                )
-                status_response.raise_for_status()
-                status_data = status_response.json()
-                
-                status_enum = status_data.get("status_enum", "").lower()
-                
-                if status_enum in ["finished", "blocked", "stopped"]:
-                    break
+                try:
+                    # Get status (increased timeout for slow responses)
+                    with httpx.Client(timeout=90.0) as client:
+                        status_response = client.get(
+                            f"{orchestrator_url}/api/v1/sessions/{session_id}"
+                        )
+                        status_response.raise_for_status()
+                        status_data = status_response.json()
+                    
+                    status_enum = status_data.get("status_enum", "").lower()
+                    
+                    if status_enum in ["finished", "blocked", "stopped"]:
+                        break
+                    
+                except (httpx.TimeoutException, httpx.ConnectError) as e:
+                    # Network issue - log and continue polling
+                    progress.update(task, description=f"[yellow]Connection issue, retrying... ({elapsed}s, poll #{poll_count})[/yellow]")
+                    continue
+                except httpx.HTTPStatusError as e:
+                    console.print(f"[red]✗[/red] HTTP Error {e.response.status_code}: {e.response.text}")
+                    raise typer.Exit(1)
                 
                 if elapsed > 600:  # 10 minutes timeout
-                    console.print("[yellow]⚠ Polling timeout. Session still running.[/yellow]")
+                    timed_out = True
                     break
         
+        elapsed = int(time.time() - start_time)
+        
+        # Handle timeout gracefully
+        if timed_out:
+            console.print(f"\n[yellow]⏱️  Polling timeout after {elapsed // 60} minutes.[/yellow]")
+            console.print(f"[dim]Devin is still analyzing this issue in the background.[/dim]\n")
+            console.print(f"[bold cyan]Check progress at:[/bold cyan]")
+            console.print(f"  [dim]•[/dim] Session: {session_url or session_id}")
+            console.print(f"  [dim]•[/dim] GitHub issue comments will be updated automatically")
+            console.print(f"  [dim]•[/dim] Re-run this command later to check status\n")
+            return
+        
         # Get final results (increased timeout)
-        final_response = httpx.get(
-            f"{orchestrator_url}/api/v1/sessions/{session_id}",
-            timeout=90.0,
-        )
-        final_response.raise_for_status()
-        final_data = final_response.json()
+        try:
+            with httpx.Client(timeout=90.0) as client:
+                final_response = client.get(
+                    f"{orchestrator_url}/api/v1/sessions/{session_id}"
+                )
+                final_response.raise_for_status()
+                final_data = final_response.json()
+        except Exception as e:
+            console.print(f"\n[yellow]⚠️  Could not fetch final results: {str(e)}[/yellow]")
+            console.print(f"[dim]Check session at: {session_url or session_id}[/dim]\n")
+            return
         
-        structured_output = final_data.get("structured_output", {})
+        structured_output = final_data.get("structured_output") or {}
+        status_enum = final_data.get("status_enum", "").lower()
         
-        console.print(f"\n[bold green]✓ Scoping complete![/bold green] (took {elapsed}s)\n")
+        # Determine completion message
+        if status_enum == "finished":
+            console.print(f"\n[bold green]✓ Scoping complete![/bold green] (took {elapsed}s)\n")
+        elif status_enum == "blocked":
+            console.print(f"\n[bold yellow]⚠️  Devin is blocked[/bold yellow] (after {elapsed}s)\n")
+            console.print("[dim]Devin may need input or encountered an issue. Check the session.[/dim]\n")
+        else:
+            console.print(f"\n[bold cyan]Session Status: {status_enum}[/bold cyan] (after {elapsed}s)\n")
         
         # Display results
         if structured_output:
@@ -353,6 +388,11 @@ def execute(
         console.print("[bold]Waiting for Devin to complete execution...[/bold]")
         console.print("[dim](This may take 10-30 minutes)[/dim]\n")
         
+        start_time = time.time()
+        poll_count = 0
+        last_status = None
+        timed_out = False
+        
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -360,74 +400,105 @@ def execute(
         ) as progress:
             task = progress.add_task("[cyan]Implementing issue...", total=None)
             
-            start_time = time.time()
-            poll_count = 0
-            last_status = None
-            
             while True:
                 time.sleep(15)  # Poll every 15 seconds
                 poll_count += 1
                 elapsed = int(time.time() - start_time)
                 
-                # Get status (increased timeout for slow responses)
-                status_response = httpx.get(
-                    f"{orchestrator_url}/api/v1/sessions/{session_id}",
-                    timeout=90.0,
-                )
-                status_response.raise_for_status()
-                status_data = status_response.json()
-                
-                status_enum = status_data.get("status_enum", "").lower()
-                structured_output = status_data.get("structured_output", {})
-                current_status = structured_output.get("status", "working")
-                
-                # Update progress message
-                if current_status != last_status:
-                    progress.update(task, description=f"[cyan]{current_status.replace('_', ' ').title()}... ({elapsed}s)")
-                    last_status = current_status
-                else:
-                    progress.update(task, description=f"[cyan]{current_status.replace('_', ' ').title()}... ({elapsed}s, poll #{poll_count})")
-                
-                if status_enum in ["finished", "blocked", "stopped"]:
-                    break
+                try:
+                    # Get status (increased timeout for slow responses)
+                    with httpx.Client(timeout=90.0) as client:
+                        status_response = client.get(
+                            f"{orchestrator_url}/api/v1/sessions/{session_id}"
+                        )
+                        status_response.raise_for_status()
+                        status_data = status_response.json()
+                    
+                    status_enum = status_data.get("status_enum", "").lower()
+                    structured_output = status_data.get("structured_output", {})
+                    current_status = structured_output.get("status", "working") if structured_output else "working"
+                    
+                    # Update progress message
+                    if current_status != last_status:
+                        progress.update(task, description=f"[cyan]{current_status.replace('_', ' ').title()}... ({elapsed}s)")
+                        last_status = current_status
+                    else:
+                        progress.update(task, description=f"[cyan]{current_status.replace('_', ' ').title()}... ({elapsed}s, poll #{poll_count})")
+                    
+                    if status_enum in ["finished", "blocked", "stopped"]:
+                        break
+                    
+                except (httpx.TimeoutException, httpx.ConnectError) as e:
+                    # Network issue - log and continue polling
+                    progress.update(task, description=f"[yellow]Connection issue, retrying... ({elapsed}s, poll #{poll_count})[/yellow]")
+                    continue
+                except httpx.HTTPStatusError as e:
+                    console.print(f"[red]✗[/red] HTTP Error {e.response.status_code}: {e.response.text}")
+                    raise typer.Exit(1)
                 
                 if elapsed > 1800:  # 30 minutes timeout
-                    console.print("[yellow]⚠ Polling timeout. Session still running.[/yellow]")
+                    timed_out = True
                     break
         
+        elapsed = int(time.time() - start_time)
+        
+        # Handle timeout gracefully
+        if timed_out:
+            console.print(f"\n[yellow]⏱️  Polling timeout after {elapsed // 60} minutes.[/yellow]")
+            console.print(f"[dim]Devin is still working on this issue in the background.[/dim]\n")
+            console.print(f"[bold cyan]Check progress at:[/bold cyan]")
+            console.print(f"  [dim]•[/dim] Session: {session_url or session_id}")
+            console.print(f"  [dim]•[/dim] GitHub issue comments will be updated automatically")
+            console.print(f"  [dim]•[/dim] Re-run this command later to check status\n")
+            return
+        
         # Get final results (increased timeout)
-        final_response = httpx.get(
-            f"{orchestrator_url}/api/v1/sessions/{session_id}",
-            timeout=90.0,
-        )
-        final_response.raise_for_status()
-        final_data = final_response.json()
+        try:
+            with httpx.Client(timeout=90.0) as client:
+                final_response = client.get(
+                    f"{orchestrator_url}/api/v1/sessions/{session_id}"
+                )
+                final_response.raise_for_status()
+                final_data = final_response.json()
+        except Exception as e:
+            console.print(f"\n[yellow]⚠️  Could not fetch final results: {str(e)}[/yellow]")
+            console.print(f"[dim]Check session at: {session_url or session_id}[/dim]\n")
+            return
         
-        structured_output = final_data.get("structured_output", {})
+        structured_output = final_data.get("structured_output") or {}
+        status_enum = final_data.get("status_enum", "").lower()
         
-        console.print(f"\n[bold green]✓ Execution complete![/bold green] (took {elapsed // 60}m {elapsed % 60}s)\n")
+        # Determine completion message
+        if status_enum == "finished":
+            console.print(f"\n[bold green]✓ Execution complete![/bold green] (took {elapsed // 60}m {elapsed % 60}s)\n")
+        elif status_enum == "blocked":
+            console.print(f"\n[bold yellow]⚠️  Devin is blocked[/bold yellow] (after {elapsed // 60}m {elapsed % 60}s)\n")
+            console.print("[dim]Devin may need input or encountered an issue. Check the session.[/dim]\n")
+        else:
+            console.print(f"\n[bold cyan]Session Status: {status_enum}[/bold cyan] (after {elapsed // 60}m {elapsed % 60}s)\n")
         
-        # Display results
+        # Display results (using simplified schema with safe defaults)
         if structured_output:
-            branch = structured_output.get("branch")
-            pr_info = structured_output.get("pr", {})
-            tests = structured_output.get("tests", {})
+            status = structured_output.get("status", "N/A")
+            branch = structured_output.get("branch", "")
+            pr_url = structured_output.get("pr_url", "")
+            tests_passed = structured_output.get("tests_passed", 0)
+            tests_failed = structured_output.get("tests_failed", 0)
+            
+            console.print(f"[bold]Status:[/bold] [cyan]{status}[/cyan]")
             
             if branch:
                 console.print(f"[bold]Branch:[/bold] [cyan]{branch}[/cyan]")
             
-            if pr_info and pr_info.get("url"):
-                console.print(f"[bold]Pull Request:[/bold] {pr_info['url']}")
-                console.print(f"[dim]Title:[/dim] {pr_info.get('title', 'N/A')}")
+            if pr_url:
+                console.print(f"[bold]Pull Request:[/bold] {pr_url}")
             
-            if tests:
-                passed = tests.get("passed", 0)
-                failed = tests.get("failed", 0)
-                console.print(f"\n[bold]Tests:[/bold] [green]{passed} passed[/green], [red]{failed} failed[/red]")
+            if tests_passed > 0 or tests_failed > 0:
+                console.print(f"\n[bold]Tests:[/bold] [green]{tests_passed} passed[/green], [red]{tests_failed} failed[/red]")
             
             console.print()
         else:
-            console.print("[yellow]No structured output available.[/yellow]\n")
+            console.print("[yellow]No structured output available yet.[/yellow]\n")
         
         console.print(f"[dim]Session: {session_url or session_id}[/dim]\n")
         

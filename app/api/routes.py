@@ -209,18 +209,27 @@ async def scope_issue(
             comments=comment_texts,
         )
         
-        # Store session in database
-        db_session = DBSession(
-            session_id=session.session_id,
-            phase=SessionPhase.SCOPE,
-            repo=request.repo,
-            issue_number=request.issue_number,
-            status=SessionStatus.CREATED,
-            title=session.title,
-            tags=session.session_id,  # Will be properly handled
-            prompt="",  # Can store if needed
-        )
-        db.add(db_session)
+        # Store session in database (check if already exists due to idempotency)
+        db_session = db.query(DBSession).filter_by(session_id=session.session_id).first()
+        if not db_session:
+            # Create new session
+            db_session = DBSession(
+                session_id=session.session_id,
+                phase=SessionPhase.SCOPE,
+                repo=request.repo,
+                issue_number=request.issue_number,
+                status=SessionStatus.CREATED,
+                title=session.title,
+                tags=session.session_id,
+                prompt="",
+            )
+            db.add(db_session)
+        else:
+            # Update existing session
+            db_session.status = SessionStatus.CREATED
+            db_session.updated_at = datetime.now()
+            logger.info(f"Reusing existing scoping session: {session.session_id}")
+        
         db.commit()
         
         # Log event
@@ -300,7 +309,16 @@ async def execute_issue(
         
         scoping_plan = {}
         if scoping_session and scoping_session.last_structured_output:
-            scoping_plan = scoping_session.last_structured_output
+            # Handle if stored as JSON string or already parsed dict
+            if isinstance(scoping_session.last_structured_output, str):
+                import json
+                try:
+                    scoping_plan = json.loads(scoping_session.last_structured_output)
+                except json.JSONDecodeError:
+                    logger.warning(f"Could not parse scoping_plan as JSON: {scoping_session.last_structured_output}")
+                    scoping_plan = {}
+            else:
+                scoping_plan = scoping_session.last_structured_output
         
         # Create Devin execution session
         devin_client = DevinClient()
@@ -311,18 +329,27 @@ async def execute_issue(
             scoping_plan=scoping_plan,
         )
         
-        # Store session in database
-        db_session = DBSession(
-            session_id=session.session_id,
-            phase=SessionPhase.EXEC,
-            repo=request.repo,
-            issue_number=request.issue_number,
-            status=SessionStatus.CREATED,
-            title=session.title,
-            tags=session.session_id,
-            prompt="",
-        )
-        db.add(db_session)
+        # Store session in database (check if already exists due to idempotency)
+        db_session = db.query(DBSession).filter_by(session_id=session.session_id).first()
+        if not db_session:
+            # Create new session
+            db_session = DBSession(
+                session_id=session.session_id,
+                phase=SessionPhase.EXEC,
+                repo=request.repo,
+                issue_number=request.issue_number,
+                status=SessionStatus.CREATED,
+                title=session.title,
+                tags=session.session_id,
+                prompt="",
+            )
+            db.add(db_session)
+        else:
+            # Update existing session
+            db_session.status = SessionStatus.CREATED
+            db_session.updated_at = datetime.now()
+            logger.info(f"Reusing existing execution session: {session.session_id}")
+        
         db.commit()
         
         # Update issue timestamp
@@ -404,7 +431,7 @@ async def get_session_status(
             if db_session:
                 if db_session.phase == SessionPhase.SCOPE:
                     structured_output = parse_scoping_from_messages(getattr(session, 'messages', []))
-                elif db_session.phase == SessionPhase.EXECUTE:
+                elif db_session.phase == SessionPhase.EXEC:
                     structured_output = parse_execution_from_messages(getattr(session, 'messages', []))
                 
                 if structured_output:
