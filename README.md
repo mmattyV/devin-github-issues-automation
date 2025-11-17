@@ -25,6 +25,7 @@ This system lets you:
 1. **📋 List** GitHub issues with filters and confidence scores
 2. **🔍 Scope** issues - Devin analyzes and creates an implementation plan with confidence score
 3. **🚀 Execute** issues - Devin implements, tests, and opens a PR automatically
+4. **📊 Status** - Track all Devin sessions with flexible filtering
 
 ## ✨ Features
 
@@ -32,9 +33,11 @@ This system lets you:
 - **⚡ Automated Execution** - Devin creates branches, implements changes, runs tests, and opens PRs
 - **📊 Beautiful CLI** - Rich terminal UI with tables, progress bars, and colors
 - **🔄 Session Tracking** - Database stores all sessions for auditing and analytics
-- **🎨 Structured Output** - Type-safe Pydantic models for all API responses
+- **📈 Status Monitoring** - Track all sessions with flexible filtering by repo, issue, or phase
+- **🎨 Structured Output** - Simplified JSON schemas with fallback message parsing
 - **📝 GitHub Integration** - Auto-posts updates and PR links to issues
-- **🛡️ Production Ready** - Error handling, retries, rate limiting, logging
+- **🛡️ Production Ready** - Error handling, retries, rate limiting, graceful timeouts, logging
+- **⏱️ Graceful Timeouts** - Long-running sessions handled with helpful guidance
 
 ## 🚀 Quick Start
 
@@ -178,6 +181,71 @@ This will take 10-30 minutes. Devin will:
 Check progress at: https://preview.devin.ai/sessions/xyz789...
 ```
 
+### `status` - Check Session Status
+
+```bash
+python devin-issues status [SESSION_ID] [OPTIONS]
+
+Options:
+  --repo, -r TEXT     Filter by repository (owner/name)
+  --issue, -i INT     Filter by issue number (requires --repo)
+  --phase, -p TEXT    Filter by phase ('scope' or 'exec')
+  --limit, -l INT     Maximum sessions to show (default: 20)
+```
+
+**List all sessions:**
+```bash
+python devin-issues status
+
+# Output:
+                    Recent Sessions (5 found)
+┌──────────────────────────────────┬─────────────┬───────┬───────┬──────────┬─────────────┐
+│ Session ID                       │ Repo        │ Issue │ Phase │  Status  │  Created    │
+├──────────────────────────────────┼─────────────┼───────┼───────┼──────────┼─────────────┤
+│ devin-abc123...                  │ owner/repo  │   #5  │ exec  │ finished │ 11/17 14:30 │
+│ devin-def456...                  │ owner/repo  │   #4  │ scope │ running  │ 11/17 13:15 │
+└──────────────────────────────────┴─────────────┴───────┴───────┴──────────┴─────────────┘
+```
+
+**Check specific session:**
+```bash
+python devin-issues status devin-abc123def456
+
+# Output:
+Session ID: devin-abc123def456
+Title: Execute Issue #5: Add admin dashboard
+Status: finished
+Created: 2025-11-17T14:30:15+00:00
+URL: https://app.devin.ai/sessions/abc123def456
+
+Structured Output:
+{
+  "status": "done",
+  "branch": "feature-issue-5-admin-dashboard",
+  "pr_url": "https://github.com/owner/repo/pull/12",
+  "tests_passed": 15,
+  "tests_failed": 0
+}
+```
+
+**Filter examples:**
+```bash
+# Sessions for a repo
+python devin-issues status -r owner/repo
+
+# Sessions for a specific issue
+python devin-issues status -r owner/repo -i 5
+
+# Only scoping sessions
+python devin-issues status -p scope
+
+# Only execution sessions
+python devin-issues status -p exec
+
+# Last 50 sessions
+python devin-issues status -l 50
+```
+
 ## 🏗️ Architecture
 
 ### Components
@@ -197,12 +265,17 @@ Check progress at: https://preview.devin.ai/sessions/xyz789...
 - **DevinClient**: Manages Devin AI sessions
   - Creates scoping/execution sessions
   - Polls for completion with exponential backoff
+  - Embeds simplified JSON schemas in prompts
   - Handles structured output
 - **GitHubClient**: Interacts with GitHub API
   - Lists/fetches issues and comments
   - Creates comments on issues
   - Manages labels
   - Rate limit handling with retries
+- **MessageParser**: Fallback structured output extraction
+  - Parses JSON from Devin's markdown messages
+  - Validates against schemas
+  - Ensures data capture even when `structured_output` is null
 
 **4. Database (`app/database.py`, `app/models.py`)**
 - SQLite (easily upgradeable to PostgreSQL)
@@ -214,8 +287,9 @@ Check progress at: https://preview.devin.ai/sessions/xyz789...
 
 **5. Schemas (`app/schemas/`)**
 - Pydantic models for type safety
-- `ScopingOutput`: Plan, confidence, risk, effort
-- `ExecutionOutput`: Branch, commits, tests, PR info
+- `ScopingOutput`: Summary, plan (list of strings), risk_level, est_effort_hours, confidence
+- `ExecutionOutput`: Status, branch, pr_url, tests_passed, tests_failed
+- Simplified flat structures for better Devin reliability
 
 ### Data Flow
 
@@ -287,32 +361,39 @@ GITHUB_RATE_LIMIT_BUFFER=100
 
 ## 🎨 Structured Output
 
-Based on [Devin's structured output docs](https://docs.devin.ai/api-reference/structured-output), our prompts embed JSON schemas that Devin populates:
+Based on [Devin's structured output docs](https://docs.devin.ai/api-reference/structured-output), our prompts embed **simplified JSON schemas** that Devin populates. We use flat structures for better reliability.
 
-**Scoping Output:**
+**Scoping Output (5 fields):**
 ```json
 {
-  "issue_number": 123,
-  "title": "Add dark mode",
-  "summary": "...",
-  "plan": [{"step": "...", "rationale": "..."}],
-  "risk": {"level": "low", "reasons": ["..."]},
-  "confidence": 0.85,
+  "summary": "Add dark mode toggle with theme persistence",
+  "plan": [
+    "Create theme context and provider",
+    "Add dark mode CSS variables",
+    "Implement toggle component",
+    "Add localStorage persistence"
+  ],
+  "risk_level": "low",
   "est_effort_hours": 3.5,
-  "definition_of_done": ["..."]
+  "confidence": 0.85
 }
 ```
 
-**Execution Output:**
+**Execution Output (5 fields):**
 ```json
 {
-  "branch": "feature/devin-issue-123-...",
-  "commits": [{"sha": "...", "message": "..."}],
-  "tests": {"passed": 10, "failed": 0},
-  "pr": {"url": "...", "number": 456},
-  "status": "done"
+  "status": "done",
+  "branch": "feature-issue-123-add-dark-mode",
+  "pr_url": "https://github.com/owner/repo/pull/456",
+  "tests_passed": 12,
+  "tests_failed": 0
 }
 ```
+
+**Fallback Mechanism:**
+- If `structured_output` is null, we parse JSON from Devin's messages
+- Extracts structured data from markdown code blocks
+- Validates against schema for reliability
 
 ## 🔐 Security
 
@@ -322,24 +403,10 @@ Based on [Devin's structured output docs](https://docs.devin.ai/api-reference/st
 - ✅ No credentials in logs or commits
 - ✅ CORS configuration for production
 
-## 🧪 Testing
-
-```bash
-# Run integration tests
-python test_integration.py
-
-# Test individual components
-python -m pytest tests/
-
-# Check API docs
-curl http://localhost:8000/docs
-```
-
 ## 📖 Documentation
 
 - **[QUICKSTART.md](QUICKSTART.md)** - Get started in 5 minutes
 - **[INSTALL.md](INSTALL.md)** - Detailed installation guide
-- **[DEVIN_API_NOTES.md](DEVIN_API_NOTES.md)** - Implementation notes based on Cognition's example
 - **[API Docs](http://localhost:8000/docs)** - Auto-generated FastAPI docs
 
 ## 🤝 Design Principles

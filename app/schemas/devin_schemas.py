@@ -8,18 +8,6 @@ from typing import List, Optional, Literal
 from datetime import datetime
 
 
-class PlanStep(BaseModel):
-    """A single step in the implementation plan."""
-    step: str = Field(..., description="Description of the step")
-    rationale: str = Field(..., description="Why this step is necessary")
-
-
-class RiskAssessment(BaseModel):
-    """Risk assessment for implementing the issue."""
-    level: Literal["low", "medium", "high"] = Field(..., description="Risk level")
-    reasons: List[str] = Field(default_factory=list, description="List of risk factors")
-
-
 class ScopingOutput(BaseModel):
     """
     Simplified structured output schema for scoping sessions.
@@ -58,27 +46,6 @@ class ScopingOutput(BaseModel):
         if v.lower() not in ["low", "medium", "high"]:
             raise ValueError("Risk level must be 'low', 'medium', or 'high'")
         return v.lower()
-
-
-class CommitInfo(BaseModel):
-    """Information about a commit made during execution."""
-    sha: str = Field(..., description="Commit SHA")
-    message: str = Field(..., description="Commit message")
-
-
-class TestResults(BaseModel):
-    """Test execution results."""
-    passed: int = Field(default=0, description="Number of tests passed", ge=0)
-    failed: int = Field(default=0, description="Number of tests failed", ge=0)
-    skipped: int = Field(default=0, description="Number of tests skipped", ge=0)
-
-
-class PRInfo(BaseModel):
-    """Information about the pull request."""
-    url: str = Field(..., description="PR URL")
-    title: str = Field(..., description="PR title")
-    body: str = Field(..., description="PR description")
-    number: Optional[int] = Field(None, description="PR number")
 
 
 class ExecutionOutput(BaseModel):

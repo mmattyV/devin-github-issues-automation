@@ -5,11 +5,6 @@ Pydantic schemas for data validation and structured outputs.
 from .devin_schemas import (
     ScopingOutput,
     ExecutionOutput,
-    PlanStep,
-    RiskAssessment,
-    CommitInfo,
-    TestResults,
-    PRInfo,
     DevinSession,
     DevinSessionCreate,
     DevinMessage,
@@ -31,11 +26,6 @@ __all__ = [
     # Devin schemas
     "ScopingOutput",
     "ExecutionOutput",
-    "PlanStep",
-    "RiskAssessment",
-    "CommitInfo",
-    "TestResults",
-    "PRInfo",
     "DevinSession",
     "DevinSessionCreate",
     "DevinMessage",

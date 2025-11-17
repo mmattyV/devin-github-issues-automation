@@ -71,6 +71,11 @@ python devin-issues scope owner/repo 123
 
 # Execute an issue
 python devin-issues execute owner/repo 123
+
+# Check status of sessions
+python devin-issues status                    # All sessions
+python devin-issues status SESSION_ID         # Specific session
+python devin-issues status -r owner/repo      # By repository
 ```
 
 ## Your First Automation
@@ -137,6 +142,22 @@ Your Repo + Issue → Devin works → Opens PR
 7. **CLI** shows you the results
 
 ## Monitoring Progress
+
+### Check via CLI (Easiest!)
+
+```bash
+# View all recent sessions
+python devin-issues status
+
+# Check specific session
+python devin-issues status YOUR_SESSION_ID
+
+# Filter by repository
+python devin-issues status -r myorg/myrepo
+
+# Filter by issue
+python devin-issues status -r myorg/myrepo -i 42
+```
 
 ### View Session in Browser
 
