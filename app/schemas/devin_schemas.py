@@ -79,7 +79,8 @@ class DevinSession(BaseModel):
     status: Optional[str] = Field(None, description="Human-readable session status")
     status_enum: Optional[Literal[
         "working",
-        "blocked", 
+        "running",
+        "blocked",
         "finished",
         "suspend_requested",
         "resume_requested",
